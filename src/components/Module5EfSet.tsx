@@ -12,6 +12,7 @@ import {
 import { EFSET_ADAPTIVE_POOL, EfSetAdaptiveItem } from '../data/assessmentBank';
 import { calculateAdaptiveStep, scoreToCEFR, CEFRLevel } from '../utils/scoring';
 import { speakFrenchText } from '../utils/speechAndAudio';
+import { DarijaBiDiText } from '../utils/bidiUtils';
 
 interface Module5EfSetProps {
   strictMode: boolean;
@@ -373,9 +374,12 @@ export const Module5EfSet: React.FC<Module5EfSetProps> = ({
                 {currentItem.explanationFr}
               </p>
               {showDarija && (
-                <p className="text-base font-arabic text-amber-800 dark:text-amber-200 pt-2 border-t border-slate-200 dark:border-slate-800">
-                  {currentItem.darijaExplanation}
-                </p>
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <DarijaBiDiText
+                    text={currentItem.darijaExplanation}
+                    className="text-base text-amber-800 dark:text-amber-200"
+                  />
+                </div>
               )}
             </div>
           )}

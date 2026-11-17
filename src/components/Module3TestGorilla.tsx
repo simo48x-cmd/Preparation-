@@ -14,6 +14,7 @@ import {
 import { TESTGORILLA_QUESTIONS, TestGorillaQuestion } from '../data/assessmentBank';
 import { speakFrenchText } from '../utils/speechAndAudio';
 import { scoreToCEFR } from '../utils/scoring';
+import { DarijaBiDiText } from '../utils/bidiUtils';
 
 interface Module3TestGorillaProps {
   strictMode: boolean;
@@ -401,9 +402,10 @@ export const Module3TestGorilla: React.FC<Module3TestGorillaProps> = ({
               </p>
               {showDarija && (
                 <div className="pt-2 border-t border-slate-200 dark:border-slate-800">
-                  <p className="text-base font-arabic text-amber-800 dark:text-amber-200 leading-relaxed">
-                    {currentQ.explanationDarija}
-                  </p>
+                  <DarijaBiDiText
+                    text={currentQ.explanationDarija}
+                    className="text-base text-amber-800 dark:text-amber-200"
+                  />
                 </div>
               )}
             </div>

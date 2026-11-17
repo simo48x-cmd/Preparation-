@@ -12,6 +12,7 @@ import {
   Languages,
   Sparkles,
   RotateCcw,
+  X,
 } from 'lucide-react';
 import {
   HARVER_MULTI_CHATS,
@@ -25,6 +26,7 @@ import {
 } from '../utils/scoring';
 import { FrenchAccentBar } from './FrenchAccentBar';
 import { ThreeTierUpgraderCard } from './ThreeTierUpgraderCard';
+import { DarijaBiDiText } from '../utils/bidiUtils';
 
 interface ChatMessage {
   sender: 'customer' | 'agent';
@@ -68,6 +70,14 @@ export const Module4Harver: React.FC<Module4HarverProps> = ({
   const [avgSlaSeconds, setAvgSlaSeconds] = useState<number>(28);
   const [lastUpgrade, setLastUpgrade] = useState<ThreeTierUpgradeResult | null>(null);
   const [showDarijaCoach, setShowDarijaCoach] = useState<boolean>(!strictMode);
+  const [mobileCrmOpen, setMobileCrmOpen] = useState<boolean>(false);
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>(() => {
+    const counts: Record<string, number> = {};
+    HARVER_MULTI_CHATS.forEach((c, idx) => {
+      counts[c.id] = idx === 0 ? 0 : 1;
+    });
+    return counts;
+  });
 
   const [sessions, setSessions] = useState<Record<string, CustomerSessionState>>(() => {
     const init: Record<string, CustomerSessionState> = {};
@@ -94,6 +104,7 @@ export const Module4Harver: React.FC<Module4HarverProps> = ({
 
   useEffect(() => {
     stageTimerStartRef.current = Date.now();
+    setUnreadCounts((prev) => ({ ...prev, [activeChatId]: 0 }));
   }, [activeChatId]);
 
   useEffect(() => {
@@ -131,13 +142,17 @@ export const Module4Harver: React.FC<Module4HarverProps> = ({
     );
     const keywordRatio = matchedKeywords.length / currentStage.expectedKeywords.length;
 
-    const upgrade = evaluateAndUpgradeFrenchResponse(text, {
-      title: `${activeChatDef.customerName} (${activeChatDef.orderId})`,
-      idealB2: currentStage.idealReplyB2,
-      idealReplyC1: currentStage.idealReplyC1,
-      idealC1: currentStage.idealReplyC1,
-      darijaTip: currentStage.darijaCoach,
-    } as any);
+    const upgrade = evaluateAndUpgradeFrenchResponse(
+      text,
+      {
+        title: `${activeChatDef.customerName} (${activeChatDef.orderId})`,
+        modality: 'written',
+        idealB2: currentStage.idealReplyB2,
+        idealReplyC1: currentStage.idealReplyC1,
+        idealC1: currentStage.idealReplyC1,
+        darijaTip: currentStage.darijaCoach,
+      } as any
+    );
     setLastUpgrade(upgrade);
 
     const csatBoost = Math.round(14 + keywordRatio * 22 + (nowSec <= 45 ? 8 : 0));
@@ -311,40 +326,65 @@ export const Module4Harver: React.FC<Module4HarverProps> = ({
           {/* 2-Column Agent Desk: Left = 3-Customer Multi-Chat | Right = CRM Knowledge Base */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
             {/* Left 7 Cols: 3-Customer Chat Tabs & Active Conversation */}
-            <div className="lg:col-span-7 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 flex flex-col justify-between space-y-4">
-              {/* 3 Customer Tabs */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                {HARVER_MULTI_CHATS.map((chat) => {
-                  const sess = sessions[chat.id];
-                  const isActive = chat.id === activeChatId;
-                  const moodEmoji = sess.csat >= 80 ? '😊' : sess.csat >= 55 ? '😐' : '😡';
-                  return (
-                    <button
-                      key={chat.id}
-                      type="button"
-                      onClick={() => setActiveChatId(chat.id)}
-                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                        isActive
-                          ? 'bg-blue-600 text-white border-blue-600'
-                          : 'bg-slate-50 dark:bg-slate-950/60 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:border-blue-500'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between text-xs font-semibold">
-                        <span className="truncate">{chat.customerName}</span>
-                        <span className="font-mono">
-                          {moodEmoji} {sess.csat}%
-                        </span>
-                      </div>
-                      <div
-                        className={`text-[11px] mt-1 truncate ${
-                          isActive ? 'text-blue-100' : 'text-slate-500 dark:text-slate-400'
+            <div className="lg:col-span-7 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 sm:p-5 flex flex-col justify-between space-y-4">
+              {/* Sticky Customer Switcher Bar + Mobile CRM Bottom Sheet Trigger */}
+              <div className="sticky top-0 z-20 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md pb-2 border-b border-slate-200 dark:border-slate-800 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                    Files d’attente actives (3 Clients en simultané) :
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setMobileCrmOpen(true)}
+                    className="lg:hidden inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600/15 text-blue-700 dark:text-blue-300 border border-blue-500/30 cursor-pointer"
+                  >
+                    <BookOpen className="w-3.5 h-3.5" />
+                    <span>📚 Ouvrir CRM & Politiques TP</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  {HARVER_MULTI_CHATS.map((chat, idx) => {
+                    const sess = sessions[chat.id];
+                    const isActive = chat.id === activeChatId;
+                    const unread = unreadCounts[chat.id] || 0;
+                    const shortBadge =
+                      idx === 0
+                        ? 'Client 1 🔴 Urgent'
+                        : idx === 1
+                        ? 'Client 2 🟡 Facture'
+                        : 'Client 3 🔵 Tech';
+                    return (
+                      <button
+                        key={chat.id}
+                        type="button"
+                        onClick={() => setActiveChatId(chat.id)}
+                        className={`p-2.5 sm:p-3 rounded-xl border text-left transition-all cursor-pointer relative ${
+                          isActive
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                            : 'bg-slate-50 dark:bg-slate-950/60 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 hover:border-blue-500'
                         }`}
                       >
-                        {chat.orderId} · {chat.issueSummary}
-                      </div>
-                    </button>
-                  );
-                })}
+                        <div className="flex items-center justify-between gap-1 text-[11px] sm:text-xs font-bold">
+                          <span className="truncate">{shortBadge}</span>
+                          {unread > 0 && !isActive && (
+                            <span className="px-1.5 py-0.2 rounded-full bg-rose-600 text-white font-mono text-[10px] font-bold shrink-0">
+                              {unread}
+                            </span>
+                          )}
+                        </div>
+                        <div
+                          className={`text-[11px] mt-1 flex items-center justify-between gap-1 ${
+                            isActive ? 'text-blue-100' : 'text-slate-500 dark:text-slate-400'
+                          }`}
+                        >
+                          <span className="truncate">{chat.customerName}</span>
+                          <span className="font-mono font-semibold shrink-0">{sess.csat}%</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Chat Message Thread */}
@@ -406,8 +446,11 @@ export const Module4Harver: React.FC<Module4HarverProps> = ({
                 )}
 
                 {showDarijaCoach && !strictMode && (
-                  <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm font-arabic text-slate-900 dark:text-amber-100">
-                    {currentStage.darijaCoach}
+                  <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                    <DarijaBiDiText
+                      text={currentStage.darijaCoach}
+                      className="text-sm text-slate-900 dark:text-amber-100"
+                    />
                   </div>
                 )}
 
@@ -441,8 +484,8 @@ export const Module4Harver: React.FC<Module4HarverProps> = ({
               </div>
             </div>
 
-            {/* Right 5 Cols: Mock CRM Knowledge Base & Policy Lookup */}
-            <div className="lg:col-span-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 flex flex-col justify-between space-y-4">
+            {/* Right 5 Cols: Mock CRM Knowledge Base & Policy Lookup (Desktop Side-by-Side) */}
+            <div className="hidden lg:flex lg:col-span-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 flex-col justify-between space-y-4">
               <div className="space-y-4">
                 <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
                   <div className="flex items-center gap-2">
@@ -498,6 +541,71 @@ export const Module4Harver: React.FC<Module4HarverProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Mobile Slide-Up Bottom Sheet Modal for CRM & Politiques TP */}
+          {mobileCrmOpen && (
+            <div
+              className="fixed inset-0 z-50 lg:hidden bg-slate-950/70 backdrop-blur-sm flex items-end justify-center p-0 sm:p-4"
+              onClick={() => setMobileCrmOpen(false)}
+            >
+              <div
+                className="w-full max-h-[82vh] rounded-t-2xl sm:rounded-2xl bg-white dark:bg-slate-900 border-t sm:border border-slate-200 dark:border-slate-800 p-5 flex flex-col space-y-4 overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <BookOpen className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <h3 className="text-sm font-display font-bold text-slate-900 dark:text-white">
+                      📚 CRM & Politiques Teleperformance
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setMobileCrmOpen(false)}
+                    className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={crmSearch}
+                    onChange={(e) => setCrmSearch(e.target.value)}
+                    placeholder="Rechercher #LP-9920, #FAC-4410, #TEC-7731..."
+                    className="w-full pl-9 pr-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-slate-100"
+                  />
+                </div>
+
+                <div className="space-y-3 overflow-y-auto pr-1 flex-1">
+                  {filteredPolicies.map((pol) => (
+                    <div
+                      key={pol.id}
+                      className="p-3.5 rounded-lg bg-slate-50 dark:bg-slate-950/80 border border-slate-200 dark:border-slate-800 space-y-1.5"
+                    >
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-mono font-bold text-blue-600 dark:text-blue-400">
+                          {pol.code}
+                        </span>
+                        <span className="text-slate-500">{pol.category}</span>
+                      </div>
+                      <h4 className="text-xs font-bold text-slate-900 dark:text-white">
+                        {pol.title}
+                      </h4>
+                      <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                        {pol.summary}
+                      </p>
+                      <div className="pt-1.5 text-[11px] text-emerald-700 dark:text-emerald-400 font-semibold">
+                        Plafond : {pol.compensationLimit}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           {lastUpgrade && (
             <ThreeTierUpgraderCard
@@ -663,9 +771,10 @@ export const Module4Harver: React.FC<Module4HarverProps> = ({
                 {currentSjt.psychometricRationaleFr}
               </p>
               <div className="p-3.5 rounded-lg bg-amber-500/10 border border-amber-500/30">
-                <p className="text-base font-arabic text-slate-900 dark:text-amber-100 leading-relaxed">
-                  {currentSjt.darijaExplanation}
-                </p>
+                <DarijaBiDiText
+                  text={currentSjt.darijaExplanation}
+                  className="text-base text-slate-900 dark:text-amber-100"
+                />
               </div>
             </div>
           )}

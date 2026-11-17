@@ -21,6 +21,7 @@ import {
   startFrenchSpeechRecognition,
   LiveSpeechController,
 } from '../utils/speechAndAudio';
+import { DarijaBiDiText } from '../utils/bidiUtils';
 
 interface Module2VersantProps {
   strictMode: boolean;
@@ -446,9 +447,10 @@ export const Module2Versant: React.FC<Module2VersantProps> = ({
         {/* Darija Tip */}
         {showDarija && (
           <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/30">
-            <p className="text-sm font-arabic text-slate-900 dark:text-amber-100 leading-relaxed">
-              {currentItem.darijaTip}
-            </p>
+            <DarijaBiDiText
+              text={currentItem.darijaTip}
+              className="text-sm text-slate-900 dark:text-amber-100"
+            />
           </div>
         )}
 

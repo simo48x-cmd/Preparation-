@@ -29,6 +29,7 @@ import {
   startFrenchSpeechRecognition,
   LiveSpeechController,
 } from '../utils/speechAndAudio';
+import { DarijaBiDiText } from '../utils/bidiUtils';
 
 const ALL_VAULT_PHRASES = [...PORTUGUESE_BPO_CHEAT_VAULT, ...EXTRA_CHEAT_VAULT_PHRASES];
 const ALL_EMAIL_TEMPLATES = [...EMAIL_TEMPLATES, ...EXTRA_EMAIL_TEMPLATES];
@@ -251,9 +252,12 @@ export const Module6VaultAndAnalytics: React.FC<Module6VaultAndAnalyticsProps> =
                   <p className="text-xs text-slate-500 dark:text-slate-400">
                     <strong>Usage :</strong> {item.whenToUse}
                   </p>
-                  <p className="text-sm font-arabic text-amber-800 dark:text-amber-200 bg-amber-500/10 rounded-lg p-2.5">
-                    {item.darijaMeaning}
-                  </p>
+                  <div className="bg-amber-500/10 rounded-lg p-2.5">
+                    <DarijaBiDiText
+                      text={item.darijaMeaning}
+                      className="text-sm text-amber-800 dark:text-amber-200"
+                    />
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-slate-800">
@@ -322,8 +326,11 @@ export const Module6VaultAndAnalytics: React.FC<Module6VaultAndAnalyticsProps> =
                   {tpl.body}
                 </pre>
               </div>
-              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm font-arabic text-slate-900 dark:text-amber-100">
-                {tpl.darijaNote}
+              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                <DarijaBiDiText
+                  text={tpl.darijaNote}
+                  className="text-sm text-slate-900 dark:text-amber-100"
+                />
               </div>
             </div>
           ))}
@@ -350,8 +357,11 @@ export const Module6VaultAndAnalytics: React.FC<Module6VaultAndAnalyticsProps> =
               <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
                 {gt.ruleExplanation}
               </p>
-              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm font-arabic text-slate-900 dark:text-amber-100">
-                {gt.darijaMnemonic}
+              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                <DarijaBiDiText
+                  text={gt.darijaMnemonic}
+                  className="text-sm text-slate-900 dark:text-amber-100"
+                />
               </div>
             </div>
           ))}
@@ -582,9 +592,10 @@ export const Module6VaultAndAnalytics: React.FC<Module6VaultAndAnalyticsProps> =
                     {drillSubmitted && (
                       <div className="text-xs text-slate-600 dark:text-slate-300 pt-2 border-t border-slate-200 dark:border-slate-800 space-y-1">
                         <p>{q.explanationFr}</p>
-                        <p className="font-arabic text-sm text-amber-700 dark:text-amber-300">
-                          {q.explanationDarija}
-                        </p>
+                        <DarijaBiDiText
+                          text={q.explanationDarija}
+                          className="text-sm text-amber-700 dark:text-amber-300"
+                        />
                       </div>
                     )}
                   </div>

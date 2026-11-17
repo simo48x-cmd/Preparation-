@@ -12,7 +12,10 @@ import {
   CheckCircle2,
   Languages,
 } from 'lucide-react';
-import { PIPPLET_SCENARIOS, PippletScenario } from '../data/assessmentBank';
+import {
+  TP_PORTUGAL_SCENARIO_POOL,
+  ExtendedPippletScenario,
+} from '../data/tpPortugalBank';
 import {
   evaluateAndUpgradeFrenchResponse,
   ThreeTierUpgradeResult,
@@ -24,6 +27,7 @@ import {
 } from '../utils/speechAndAudio';
 import { FrenchAccentBar } from './FrenchAccentBar';
 import { ThreeTierUpgraderCard } from './ThreeTierUpgraderCard';
+import { DarijaBiDiText } from '../utils/bidiUtils';
 
 interface Module1PippletProps {
   strictMode: boolean;
@@ -41,9 +45,13 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
   onRecordResult,
   onBookmarkPhrase,
 }) => {
-  const [scenarios, setScenarios] = useState<PippletScenario[]>(PIPPLET_SCENARIOS);
-  const [selectedId, setSelectedId] = useState<string>(PIPPLET_SCENARIOS[0].id);
-  const currentScenario = scenarios.find((s) => s.id === selectedId) || scenarios[0];
+  // Pre-load initial 6 scenarios from the 16-scenario Teleperformance Portugal pool
+  const [scenarios, setScenarios] = useState<ExtendedPippletScenario[]>(() =>
+    TP_PORTUGAL_SCENARIO_POOL.slice(0, 6)
+  );
+  const [selectedId, setSelectedId] = useState<string>(TP_PORTUGAL_SCENARIO_POOL[0].id);
+  const currentScenario =
+    scenarios.find((s) => s.id === selectedId) || scenarios[0];
 
   const [phase, setPhase] = useState<'idle' | 'prep' | 'recording' | 'writing' | 'graded'>('idle');
   const [timeLeft, setTimeLeft] = useState<number>(currentScenario.responseSeconds);
@@ -52,14 +60,26 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
   const [waveform, setWaveform] = useState<number[]>(Array(24).fill(18));
   const [speechNotice, setSpeechNotice] = useState<string>('');
   const [isEvaluating, setIsEvaluating] = useState<boolean>(false);
-  const [isGeneratingScenario, setIsGeneratingScenario] = useState<boolean>(false);
+
+  // Bug Fix 1: Independent loading states for Written vs Oral generation + Toast feedback
+  const [isGeneratingWritten, setIsGeneratingWritten] = useState<boolean>(false);
+  const [isGeneratingOral, setIsGeneratingOral] = useState<boolean>(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
   const [evaluationResult, setEvaluationResult] = useState<ThreeTierUpgradeResult | null>(null);
   const [showCoachHint, setShowCoachHint] = useState<boolean>(false);
 
   const speechControllerRef = useRef<LiveSpeechController | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const recordingStartRef = useRef<number>(Date.now());
 
-  useEffect(() => {
+  const triggerToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 4000);
+  };
+
+  // Bug Fix 4: Full state and timer reset when switching scenarios or clicking Recommencer l'exercice
+  const resetExerciseState = (targetScenario: ExtendedPippletScenario = currentScenario) => {
     speechControllerRef.current?.stop();
     setPhase('idle');
     setIsPaused(false);
@@ -67,11 +87,15 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
     setEvaluationResult(null);
     setSpeechNotice('');
     setTimeLeft(
-      currentScenario.type === 'spoken'
-        ? currentScenario.prepSeconds
-        : currentScenario.responseSeconds
+      targetScenario.type === 'spoken'
+        ? targetScenario.prepSeconds
+        : targetScenario.responseSeconds
     );
-  }, [selectedId, currentScenario.type, currentScenario.prepSeconds, currentScenario.responseSeconds]);
+  };
+
+  useEffect(() => {
+    resetExerciseState(currentScenario);
+  }, [selectedId]);
 
   useEffect(() => {
     if (phase !== 'prep' && phase !== 'recording' && phase !== 'writing') return;
@@ -99,14 +123,17 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
     speechControllerRef.current?.stop();
     setPhase('recording');
     setTimeLeft(currentScenario.responseSeconds);
+    recordingStartRef.current = Date.now();
     speechControllerRef.current = startFrenchSpeechRecognition({
+      lang: 'fr-FR',
+      initialText: responseText,
       onTranscript: (text) => setResponseText(text),
       onWaveformUpdate: (bars) => setWaveform(bars),
       onError: (msg) => setSpeechNotice(msg),
     });
   };
 
-  const handleStartTask = () => {
+  const handleStartPreparation = () => {
     setEvaluationResult(null);
     if (currentScenario.type === 'spoken') {
       setPhase('prep');
@@ -120,11 +147,17 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
 
   const handleStopAndSubmit = async () => {
     speechControllerRef.current?.stop();
+    const modality = currentScenario.type;
+    const elapsedOralSeconds =
+      modality === 'spoken'
+        ? Math.max(5, Math.round((Date.now() - recordingStartRef.current) / 1000))
+        : undefined;
+
     const inputToGrade =
       responseText.trim() ||
-      (currentScenario.type === 'spoken'
-        ? "Bonjour Monsieur, je suis desole pour ce probleme sur votre commande. Je vais voir avec le transporteur et nous allons vous envoyer un coursier express avant 18h avec 15% de remise."
-        : "Bonjour Monsieur, suite a votre message pour la commande #FR-88210, le delai de 30 jours est depasse mais nous vous offrons un bon de 20% valable 6 mois. Cordialement.");
+      (modality === 'spoken'
+        ? "Bonjour Monsieur, je suis desole pour ce probleme sur votre commande. Malgré que le colis soit bloque, je vais voir avec le transporteur et nous allons vous envoyer un coursier express avant 18h avec 15% de remise."
+        : "Bonjour Monsieur, suite a votre message pour la commande #FR-88210, je suis desole mais le delai de 30 jours est depasse. Malgré que ce soit hors delai, nous vous offrons un bon de 20% valable 6 mois. Cordialement.");
 
     if (!responseText.trim()) {
       setResponseText(inputToGrade);
@@ -139,6 +172,8 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rawInput: inputToGrade,
+          modality,
+          recordedDurationSeconds: elapsedOralSeconds,
           scenarioTitle: currentScenario.title,
           promptTask: currentScenario.promptTask,
           idealB2: currentScenario.idealB2,
@@ -150,7 +185,7 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
         const data = await res.json();
         setEvaluationResult(data.evaluation);
         onRecordResult({
-          moduleName: `Pipplet (${currentScenario.type === 'spoken' ? 'Oral' : 'Écrit'})`,
+          moduleName: `Pipplet (${modality === 'spoken' ? 'Oral' : 'Écrit'})`,
           score: data.evaluation.overallScore,
           cefr: data.evaluation.overallCefr,
           weaknesses: data.evaluation.detectedWeaknesses || [],
@@ -160,6 +195,8 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
       }
     } catch {
       const localEval = evaluateAndUpgradeFrenchResponse(inputToGrade, {
+        modality,
+        recordedDurationSeconds: elapsedOralSeconds,
         title: currentScenario.title,
         idealB2: currentScenario.idealB2,
         idealC1: currentScenario.idealC1,
@@ -167,7 +204,7 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
       });
       setEvaluationResult(localEval);
       onRecordResult({
-        moduleName: `Pipplet (${currentScenario.type === 'spoken' ? 'Oral' : 'Écrit'})`,
+        moduleName: `Pipplet (${modality === 'spoken' ? 'Oral' : 'Écrit'})`,
         score: localEval.overallScore,
         cefr: localEval.overallCefr,
         weaknesses: localEval.detectedWeaknesses,
@@ -193,28 +230,74 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
     }, 10);
   };
 
+  // Bug Fix 1: Independent Written vs Oral generation + Guaranteed Local Fallback from 16+ TP Portugal pool
   const handleGenerateAIScenario = async (type: 'spoken' | 'written') => {
-    setIsGeneratingScenario(true);
+    if (type === 'written') {
+      setIsGeneratingWritten(true);
+    } else {
+      setIsGeneratingOral(true);
+    }
+
+    const pickLocalFallbackScenario = (): ExtendedPippletScenario => {
+      const existingTitles = new Set(scenarios.map((s) => s.title));
+      const unseen = TP_PORTUGAL_SCENARIO_POOL.filter(
+        (s) => s.type === type && !existingTitles.has(s.title)
+      );
+      const pool =
+        unseen.length > 0
+          ? unseen
+          : TP_PORTUGAL_SCENARIO_POOL.filter((s) => s.type === type);
+      const chosen = pool[Math.floor(Math.random() * pool.length)] || TP_PORTUGAL_SCENARIO_POOL[0];
+      return {
+        ...chosen,
+        id: `tp-local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      };
+    };
+
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
       const res = await fetch('/api/ai/generate-scenario', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           type,
-          sector: type === 'spoken' ? 'Banque & Assurance VIP Lisbonne' : 'Support E-Commerce & Logistique Porto',
+          excludeIds: scenarios.map((s) => s.id),
+          sector:
+            type === 'spoken'
+              ? 'Fintech 2FA & Compagnie Aérienne Lisbonne'
+              : 'Support E-Commerce Luxe & SEPA Portugal',
         }),
       });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
         const data = await res.json();
-        if (data.scenario) {
-          setScenarios((prev) => [data.scenario, ...prev]);
-          setSelectedId(data.scenario.id);
+        if (data.scenario && data.scenario.title) {
+          const newSc: ExtendedPippletScenario = {
+            ...data.scenario,
+            projectTag: data.scenario.projectTag || (type === 'spoken' ? 'Fintech' : 'E-Commerce'),
+          };
+          setScenarios((prev) => [newSc, ...prev]);
+          setSelectedId(newSc.id);
+          triggerToast('Nouveau scénario TP Portugal généré avec succès !');
+          return;
         }
       }
+      throw new Error('Use local pool fallback');
     } catch {
-      // ignore
+      const fallbackSc = pickLocalFallbackScenario();
+      setScenarios((prev) => [fallbackSc, ...prev]);
+      setSelectedId(fallbackSc.id);
+      triggerToast('Nouveau scénario TP Portugal généré avec succès !');
     } finally {
-      setIsGeneratingScenario(false);
+      if (type === 'written') {
+        setIsGeneratingWritten(false);
+      } else {
+        setIsGeneratingOral(false);
+      }
     }
   };
 
@@ -229,91 +312,114 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Module Top Header & Scenario Switcher */}
-      <div className="rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6">
+      {/* Toast Notification Banner */}
+      {toastMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed top-16 right-4 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl bg-emerald-600 text-white text-xs font-semibold shadow-lg border border-emerald-400/30"
+        >
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* Module Top Header & horizontally scrollable snap Scenario Cards */}
+      <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 sm:p-6">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
           <div>
-            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-1">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-1">
               <span>Module 01</span>
               <span aria-hidden="true">·</span>
-              <span>Pipplet (by ETS) Corporate French Assessment</span>
+              <span>Pipplet (by ETS) — Teleperformance Portugal Edition</span>
               <span aria-hidden="true">·</span>
-              <span>100% Réponses Ouvertes (Oral & Écrit)</span>
+              <span>100% Réponses Ouvertes ({TP_PORTUGAL_SCENARIO_POOL.length} Scénarios Pré-chargés)</span>
             </div>
-            <h2 className="text-xl font-display font-bold text-slate-900 dark:text-white">
-              Simulateur Pipplet — Scénarios Ouverts BPO Portugal
+            <h2 className="text-lg sm:text-xl font-display font-bold text-slate-900 dark:text-white">
+              Simulateur Pipplet — Scénarios Ouverts BPO Lisbonne & Porto
             </h2>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
             <button
               type="button"
-              disabled={isGeneratingScenario}
+              disabled={isGeneratingWritten}
               onClick={() => handleGenerateAIScenario('written')}
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              className="inline-flex items-center justify-center gap-2 min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
               <Sparkles className="w-3.5 h-3.5" />
-              <span>{isGeneratingScenario ? 'Génération IA...' : 'Nouveau Scénario IA (Écrit)'}</span>
+              <span>
+                {isGeneratingWritten ? 'Génération Écrit...' : 'Nouveau Scénario IA (Écrit)'}
+              </span>
             </button>
             <button
               type="button"
-              disabled={isGeneratingScenario}
+              disabled={isGeneratingOral}
               onClick={() => handleGenerateAIScenario('spoken')}
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              className="inline-flex items-center justify-center gap-2 min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
               <Headphones className="w-3.5 h-3.5" />
-              <span>Nouveau Scénario IA (Oral)</span>
+              <span>
+                {isGeneratingOral ? 'Génération Oral...' : 'Nouveau Scénario IA (Oral)'}
+              </span>
             </button>
           </div>
         </div>
 
-        {/* Scenario Selector Tabs */}
-        <div className="mt-4 flex flex-wrap gap-2">
-          {scenarios.map((sc) => {
-            const active = sc.id === currentScenario.id;
-            return (
-              <button
-                key={sc.id}
-                type="button"
-                onClick={() => setSelectedId(sc.id)}
-                className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                  active
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-100 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
-                }`}
-              >
-                {sc.type === 'spoken' ? (
-                  <Headphones className="w-3.5 h-3.5 shrink-0" />
-                ) : (
-                  <FileText className="w-3.5 h-3.5 shrink-0" />
-                )}
-                <span className="truncate max-w-[260px]">{sc.title}</span>
-                <span className="font-mono text-[11px] opacity-80">[{sc.cefrTarget}]</span>
-              </button>
-            );
-          })}
+        {/* Zero-Truncation Horizontally Scrollable Snap Scenario Cards */}
+        <div className="mt-4">
+          <div className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">
+            Sélectionnez un scénario Teleperformance Portugal (Glissez horizontalement sur mobile) :
+          </div>
+          <div className="flex overflow-x-auto snap-x snap-mandatory gap-3 pb-2 no-scrollbar">
+            {scenarios.map((sc) => {
+              const active = sc.id === currentScenario.id;
+              return (
+                <button
+                  key={sc.id}
+                  type="button"
+                  onClick={() => setSelectedId(sc.id)}
+                  className={`snap-start shrink-0 w-[275px] sm:w-[300px] text-left p-3.5 rounded-xl border transition-all cursor-pointer flex flex-col justify-between gap-2 ${
+                    active
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                      : 'bg-slate-50 dark:bg-slate-800/80 text-slate-800 dark:text-slate-200 border-slate-200 dark:border-slate-700/80 hover:border-blue-500'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-semibold">
+                    <span>
+                      {sc.type === 'spoken' ? '🎙️ Oral (90s)' : '✍️ Écrit (5m)'} · {sc.projectTag}
+                    </span>
+                    <span className="font-mono">Cible {sc.cefrTarget}</span>
+                  </div>
+                  <div className="text-xs sm:text-sm font-semibold leading-snug whitespace-normal">
+                    {sc.title}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
       {/* Main Pipplet Workspace Split */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
         {/* Left Column: Customer Prompt & Rubric Context */}
-        <div className="lg:col-span-5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 flex flex-col justify-between space-y-5">
+        <div className="lg:col-span-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 sm:p-6 flex flex-col justify-between space-y-5">
           <div className="space-y-4">
-            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+            <div className="flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
               <span>{currentScenario.companyContext}</span>
-              <span className="font-mono font-semibold text-blue-600 dark:text-blue-400">
-                Cible {currentScenario.cefrTarget}
+              <span className="font-mono font-semibold text-blue-600 dark:text-blue-400 shrink-0">
+                {currentScenario.projectTag} · {currentScenario.cefrTarget}
               </span>
             </div>
 
-            <h3 className="text-lg font-display font-bold text-slate-900 dark:text-white">
+            <h3 className="text-lg font-display font-bold text-slate-900 dark:text-white leading-snug">
               {currentScenario.title}
             </h3>
 
             {/* Customer Audio / Written Ticket Box */}
-            <div className="rounded-lg bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 p-4 space-y-3">
-              <div className="flex items-center justify-between">
+            <div className="rounded-xl bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                   {currentScenario.type === 'spoken'
                     ? 'Message Vocal du Client (Audio fr-FR)'
@@ -322,7 +428,7 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
                 <button
                   type="button"
                   onClick={() => speakFrenchText(currentScenario.customerVoiceScript)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-blue-600/10 text-blue-600 dark:text-blue-400 hover:bg-blue-600/20 text-xs font-semibold cursor-pointer"
+                  className="inline-flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 rounded-lg bg-blue-600/10 text-blue-600 dark:text-blue-400 hover:bg-blue-600/20 text-xs font-semibold cursor-pointer"
                 >
                   <Volume2 className="w-3.5 h-3.5" />
                   <span>Écouter l’audio client</span>
@@ -362,13 +468,13 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
             </div>
           </div>
 
-          {/* Super-Coach Darija Hint Toggle (Hidden in Strict Mode) */}
+          {/* Super-Coach Darija Hint Toggle with BiDi Isolation */}
           {!strictMode && (
             <div className="pt-4 border-t border-slate-200 dark:border-slate-800">
               <button
                 type="button"
                 onClick={() => setShowCoachHint((prev) => !prev)}
-                className="w-full inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30 hover:bg-amber-500/20 transition-colors cursor-pointer"
+                className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/30 hover:bg-amber-500/20 transition-colors cursor-pointer"
               >
                 <Languages className="w-4 h-4" />
                 <span>
@@ -378,8 +484,11 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
                 </span>
               </button>
               {showCoachHint && (
-                <div className="mt-3 p-3.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm font-arabic text-slate-900 dark:text-amber-100 leading-relaxed">
-                  {currentScenario.darijaTip}
+                <div className="mt-3 p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20">
+                  <DarijaBiDiText
+                    text={currentScenario.darijaTip}
+                    className="text-sm text-slate-900 dark:text-amber-100"
+                  />
                 </div>
               )}
             </div>
@@ -387,17 +496,21 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
         </div>
 
         {/* Right Column: Active Timed Recording / Writing Arena */}
-        <div className="lg:col-span-7 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 flex flex-col justify-between space-y-5">
-          {/* Countdown Timer Bar */}
+        <div className="lg:col-span-7 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 sm:p-6 flex flex-col justify-between space-y-5">
+          {/* Countdown Timer & Always-Accessible Prep / Recording Controls (Bug Fix 4) */}
           <div
-            className={`flex flex-wrap items-center justify-between gap-4 p-4 rounded-lg border transition-colors ${
+            className={`flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl border transition-colors ${
               isWarningFlash
                 ? 'bg-amber-500/15 border-amber-500 text-amber-800 dark:text-amber-200'
                 : 'bg-slate-50 dark:bg-slate-950/70 border-slate-200 dark:border-slate-800'
             }`}
           >
             <div className="flex items-center gap-3">
-              <Clock className={`w-5 h-5 ${isWarningFlash ? 'text-amber-500' : 'text-blue-600 dark:text-blue-400'}`} />
+              <Clock
+                className={`w-5 h-5 shrink-0 ${
+                  isWarningFlash ? 'text-amber-500' : 'text-blue-600 dark:text-blue-400'
+                }`}
+              />
               <div>
                 <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
                   {phase === 'prep'
@@ -410,42 +523,49 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
                   {formatMMSS(timeLeft)}
                   {isWarningFlash && (
                     <span className="ml-2 text-xs font-sans font-semibold text-amber-600 dark:text-amber-400">
-                      — Relisez vos accents et accords (30 dernières secondes) !
+                      — Relisez vos accents (30s) !
                     </span>
                   )}
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              {phase === 'idle' && (
+            <div className="flex flex-wrap items-center gap-2">
+              {currentScenario.type === 'spoken' ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleStartPreparation}
+                    className="inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors cursor-pointer"
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>Démarrer Préparation (30s)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={startSpokenRecordingPhase}
+                    className={`inline-flex items-center gap-1.5 min-h-[40px] px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                      phase === 'recording'
+                        ? 'bg-rose-600 text-white'
+                        : 'bg-emerald-600 text-white hover:bg-emerald-700'
+                    }`}
+                  >
+                    <Mic className="w-3.5 h-3.5" />
+                    <span>
+                      {phase === 'recording'
+                        ? 'Enregistrement actif...'
+                        : 'Démarrer Enregistrement (90s)'}
+                    </span>
+                  </button>
+                </>
+              ) : (
                 <button
                   type="button"
-                  onClick={handleStartTask}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors cursor-pointer"
+                  onClick={handleStartPreparation}
+                  className="inline-flex items-center gap-2 min-h-[40px] px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors cursor-pointer"
                 >
-                  {currentScenario.type === 'spoken' ? (
-                    <>
-                      <Mic className="w-4 h-4" />
-                      <span>Démarrer Préparation (30s)</span>
-                    </>
-                  ) : (
-                    <>
-                      <FileText className="w-4 h-4" />
-                      <span>Lancer le Chronomètre (05:00)</span>
-                    </>
-                  )}
-                </button>
-              )}
-
-              {phase === 'prep' && (
-                <button
-                  type="button"
-                  onClick={startSpokenRecordingPhase}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors cursor-pointer"
-                >
-                  <Mic className="w-4 h-4" />
-                  <span>Passer à l’enregistrement maintenant</span>
+                  <FileText className="w-4 h-4" />
+                  <span>Lancer le Chronomètre (05:00)</span>
                 </button>
               )}
 
@@ -453,7 +573,7 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsPaused((p) => !p)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-700 cursor-pointer"
+                  className="min-h-[40px] px-3 py-1.5 rounded-xl text-xs font-medium bg-slate-200 dark:bg-slate-800 text-slate-800 dark:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-700 cursor-pointer"
                 >
                   {isPaused ? 'Reprendre Timer' : 'Pause Coach'}
                 </button>
@@ -469,7 +589,7 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
                         : "Bonjour Monsieur,\n\nSuite a votre message pour la commande #FR-88210, je suis desole mais le delai de 30 jours est depasse (45 jours). Du coup je ne peux pas vous rembourser, mais je vous offre un bon de 20% valable 6 mois.\n\nCordialement."
                     )
                   }
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 cursor-pointer"
+                  className="min-h-[40px] px-3 py-1.5 rounded-xl text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-200 dark:hover:bg-slate-700 cursor-pointer"
                 >
                   Insérer Brouillon B1/B2 Test
                 </button>
@@ -477,17 +597,19 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
             </div>
           </div>
 
-          {/* Spoken Audio Waveform Visualizer (when scenario is spoken) */}
+          {/* Spoken Audio Waveform Visualizer */}
           {currentScenario.type === 'spoken' && (
-            <div className="rounded-lg bg-slate-900 text-white p-4 space-y-3 border border-slate-800">
+            <div className="rounded-xl bg-slate-900 text-white p-4 space-y-3 border border-slate-800">
               <div className="flex items-center justify-between text-xs text-slate-400">
                 <span>
                   {phase === 'recording'
-                    ? 'Microphone Actif — Reconnaissance Vocale Web Speech (fr-FR)'
+                    ? '🎙️ Microphone Actif — Reconnaissance Vocale Continue (iOS/Android/Desktop)'
                     : 'Visualiseur Audio & Transcription Directe'}
                 </span>
                 <span className="font-mono">
-                  {responseText.trim() ? `${responseText.trim().split(/\s+/).length} mots détectés` : 'Prêt'}
+                  {responseText.trim()
+                    ? `${responseText.trim().split(/\s+/).length} mots détectés`
+                    : 'Prêt'}
                 </span>
               </div>
 
@@ -503,22 +625,23 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
                 ))}
               </div>
 
-              {speechNotice && (
-                <p className="text-xs text-amber-300">{speechNotice}</p>
-              )}
+              {speechNotice && <p className="text-xs text-amber-300">{speechNotice}</p>}
             </div>
           )}
 
-          {/* French Virtual Accent Bar */}
+          {/* Touch-Friendly Docked French Virtual Accent Bar */}
           <FrenchAccentBar onInsert={handleInsertAccent} />
 
-          {/* Response Textarea (Works for Written Email OR Live Editable Spoken Transcript) */}
+          {/* Response Textarea */}
           <div className="space-y-2 flex-1 flex flex-col">
             <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-              <label htmlFor="pipplet-response-box" className="font-semibold text-slate-700 dark:text-slate-300">
+              <label
+                htmlFor="pipplet-response-box"
+                className="font-semibold text-slate-700 dark:text-slate-300"
+              >
                 {currentScenario.type === 'spoken'
                   ? 'Transcription Orale (en direct ou saisie manuelle pour évaluation) :'
-                  : 'Votre Réponse E-mail Client :'}
+                  : 'Votre Réponse E-mail Client (Évaluation Écrite 4 Critères) :'}
               </label>
               <span className="font-mono tabular-nums">
                 {responseText.trim() ? responseText.trim().split(/\s+/).length : 0} mots
@@ -543,41 +666,35 @@ export const Module1Pipplet: React.FC<Module1PippletProps> = ({
               }}
               placeholder={
                 currentScenario.type === 'spoken'
-                  ? 'Parlez dans votre microphone après avoir cliqué sur Démarrer, ou saisissez votre script oral en français ici...'
+                  ? 'Cliquez sur Démarrer Enregistrement (90s) et parlez en français, ou saisissez votre réponse orale ici...'
                   : 'Rédigez votre e-mail professionnel en français (Salutation, Empathie, Solution, Formule de politesse)...'
               }
-              className="w-full flex-1 rounded-lg bg-slate-50 dark:bg-slate-950/80 border border-slate-300 dark:border-slate-700 p-4 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 leading-relaxed"
+              className="w-full flex-1 rounded-xl bg-slate-50 dark:bg-slate-950/80 border border-slate-300 dark:border-slate-700 p-4 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-600 leading-relaxed"
             />
           </div>
 
-          {/* Action Footer */}
+          {/* Action Footer with Recommencer l'exercice */}
           <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-200 dark:border-slate-800">
             <button
               type="button"
-              onClick={() => {
-                speechControllerRef.current?.stop();
-                setPhase('idle');
-                setResponseText('');
-                setEvaluationResult(null);
-                setTimeLeft(
-                  currentScenario.type === 'spoken'
-                    ? currentScenario.prepSeconds
-                    : currentScenario.responseSeconds
-                );
-              }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              onClick={() => resetExerciseState(currentScenario)}
+              className="inline-flex items-center gap-1.5 min-h-[44px] px-4 py-2 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span>Réinitialiser</span>
+              <span>Recommencer l’exercice</span>
             </button>
 
             <button
               type="button"
               disabled={isEvaluating}
               onClick={handleStopAndSubmit}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors cursor-pointer"
+              className="inline-flex items-center justify-center gap-2 min-h-[44px] px-5 py-2.5 rounded-xl text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors cursor-pointer"
             >
-              {phase === 'recording' ? <Square className="w-3.5 h-3.5" /> : <Send className="w-3.5 h-3.5" />}
+              {phase === 'recording' ? (
+                <Square className="w-3.5 h-3.5" />
+              ) : (
+                <Send className="w-3.5 h-3.5" />
+              )}
               <span>
                 {isEvaluating
                   ? 'Analyse Psychométrique IA en cours...'
