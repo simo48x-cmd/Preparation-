@@ -4,7 +4,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
-import { evaluateAndUpgradeFrenchResponse } from './src/utils/scoring.ts';
+import { evaluateAndUpgradeFrenchResponse, buildModalityCriteriaBars } from './src/utils/scoring.ts';
+import { TP_PORTUGAL_SCENARIO_POOL } from './src/data/tpPortugalBank.ts';
 
 dotenv.config();
 
@@ -34,11 +35,23 @@ async function startServer() {
 
   // 1. Evaluate & 3-Tier Upgrade Open-Ended French Spoken/Written Response
   app.post('/api/ai/evaluate-response', async (req, res) => {
-    const { rawInput, scenarioTitle, promptTask, idealB2, idealC1, darijaTip } = req.body || {};
+    const {
+      rawInput,
+      scenarioTitle,
+      promptTask,
+      idealB2,
+      idealC1,
+      darijaTip,
+      modality = 'written',
+      recordedDurationSeconds = 0,
+    } = req.body || {};
+
     if (!rawInput || typeof rawInput !== 'string') {
       res.status(400).json({ error: 'rawInput is required' });
       return;
     }
+
+    const safeModality: 'written' | 'spoken' = modality === 'spoken' ? 'spoken' : 'written';
 
     // Compute baseline heuristic evaluation first
     const heuristic = evaluateAndUpgradeFrenchResponse(rawInput, {
@@ -46,6 +59,8 @@ async function startServer() {
       idealB2,
       idealC1,
       darijaTip,
+      modality: safeModality,
+      recordedDurationSeconds: Number(recordedDurationSeconds) || 0,
     });
 
     const ai = getGenAIClient();
@@ -56,19 +71,20 @@ async function startServer() {
 
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: `Tu es un examinateur officiel Pipplet / Versant / Harver pour le recrutement BPO francophone au Portugal (Teleperformance, Foundever, Concentrix, BNP Paribas) et un coach bilingue Français / Darija marocaine.
+        model: 'gemini-3-flash-preview',
+        contents: `Tu es un examinateur officiel Pipplet / Versant / Harver pour le recrutement chez Teleperformance Portugal (Lisbonne - Programme Atlantic Experience) et un coach bilingue Français / Darija marocaine.
 
+Modalité : ${safeModality === 'spoken' ? 'ORAL (Réponse Vocale)' : 'ÉCRIT (E-mail / Ticket Service Client)'}
 Scénario : ${scenarioTitle || 'Réponse Service Client BPO'}
 Consigne : ${promptTask || 'Répondre avec professionnalisme et empathie au client.'}
 Réponse du candidat : """${rawInput}"""
 
 Analyse cette réponse et retourne un objet JSON contenant :
 1) versionB2 : Version corrigée professionnelle niveau B2 sans fautes.
-2) versionC1 : Version C1/C2 "Top 1% Recruiter Magnet" utilisant des connecteurs soutenus (Bien que + subjonctif, Par conséquent, Conformément à, Nous vous prions de bien vouloir nous excuser).
-3) darijaExplanation : Explication claire, chaleureuse et pédagogique en Darija marocaine (écrite en alphabet arabe واضح بالدارجة المغربية) expliquant les erreurs commises et l'astuce pour décrocher C1 lors du test au Portugal.
+2) versionC1 : Version C1/C2 "Top 1% Recruiter Magnet" utilisant des connecteurs soutenus ("Bien que + subjonctif", "Par conséquent", "Conformément à", "Nous vous prions de bien vouloir nous excuser").
+3) darijaExplanation : Explication claire, chaleureuse et pédagogique en Darija marocaine (écrite en alphabet arabe واضح بالدارجة المغربية) expliquant les erreurs commises et l'astuce pour décrocher C1 chez Teleperformance Portugal. Mets les expressions françaises entre guillemets (ex: "Par conséquent").
 4) frenchRuleSummary : Résumé concis de la règle grammaticale et stylistique en français.
-5) pronunciationScore (0-100), fluencyScore (0-100), coherenceScore (0-100), grammarScore (0-100).
+5) pronunciationScore (0-100), fluencyScore (0-100), coherenceScore (0-100), grammarScore (0-100), spellingScore (0-100), vocabularyScore (0-100).
 6) overallCefr : "A1" | "A2" | "B1" | "B2" | "C1" | "C2".
 7) detectedWeaknesses : Liste de 1 à 3 points précis à travailler.`,
         config: {
@@ -84,6 +100,8 @@ Analyse cette réponse et retourne un objet JSON contenant :
               fluencyScore: { type: Type.NUMBER },
               coherenceScore: { type: Type.NUMBER },
               grammarScore: { type: Type.NUMBER },
+              spellingScore: { type: Type.NUMBER },
+              vocabularyScore: { type: Type.NUMBER },
               overallCefr: { type: Type.STRING },
               detectedWeaknesses: {
                 type: Type.ARRAY,
@@ -95,28 +113,44 @@ Analyse cette réponse et retourne un objet JSON contenant :
       });
 
       const parsed = JSON.parse((response.text ?? '{}').trim());
-      const overallScore = Math.round(
-        ((parsed.pronunciationScore ?? heuristic.cefrCriteria.pronunciation) +
-          (parsed.fluencyScore ?? heuristic.cefrCriteria.fluency) +
-          (parsed.coherenceScore ?? heuristic.cefrCriteria.coherence) +
-          (parsed.grammarScore ?? heuristic.cefrCriteria.grammar)) /
-          4
-      );
+      const mergedCriteria = {
+        pronunciation: parsed.pronunciationScore ?? heuristic.cefrCriteria.pronunciation ?? 75,
+        fluency: parsed.fluencyScore ?? heuristic.cefrCriteria.fluency ?? 75,
+        coherence: parsed.coherenceScore ?? heuristic.cefrCriteria.coherence,
+        grammar: parsed.grammarScore ?? heuristic.cefrCriteria.grammar,
+        grammarSyntax: parsed.grammarScore ?? heuristic.cefrCriteria.grammarSyntax ?? heuristic.cefrCriteria.grammar,
+        orthographyAccents: parsed.spellingScore ?? heuristic.cefrCriteria.orthographyAccents ?? 82,
+        lexicalRichness: parsed.vocabularyScore ?? heuristic.cefrCriteria.lexicalRichness ?? 80,
+      };
+
+      const overallScore =
+        safeModality === 'written'
+          ? Math.round(
+              (mergedCriteria.grammarSyntax +
+                mergedCriteria.orthographyAccents +
+                mergedCriteria.lexicalRichness +
+                mergedCriteria.coherence) /
+                4
+            )
+          : Math.round(
+              (mergedCriteria.pronunciation +
+                mergedCriteria.fluency +
+                mergedCriteria.coherence +
+                mergedCriteria.grammar) /
+                4
+            );
 
       res.json({
         source: 'gemini-ai',
         evaluation: {
           ...heuristic,
+          modality: safeModality,
           versionB2: parsed.versionB2 || heuristic.versionB2,
           versionC1: parsed.versionC1 || heuristic.versionC1,
           darijaExplanation: parsed.darijaExplanation || heuristic.darijaExplanation,
           frenchRuleSummary: parsed.frenchRuleSummary || heuristic.frenchRuleSummary,
-          cefrCriteria: {
-            pronunciation: parsed.pronunciationScore ?? heuristic.cefrCriteria.pronunciation,
-            fluency: parsed.fluencyScore ?? heuristic.cefrCriteria.fluency,
-            coherence: parsed.coherenceScore ?? heuristic.cefrCriteria.coherence,
-            grammar: parsed.grammarScore ?? heuristic.cefrCriteria.grammar,
-          },
+          cefrCriteria: mergedCriteria,
+          modalityCriteriaBars: buildModalityCriteriaBars(safeModality, mergedCriteria),
           overallCefr: parsed.overallCefr || heuristic.overallCefr,
           overallScore,
           detectedWeaknesses:
@@ -125,43 +159,35 @@ Analyse cette réponse et retourne un objet JSON contenant :
               : heuristic.detectedWeaknesses,
         },
       });
-    } catch (error) {
-      // Fallback cleanly to heuristic evaluation if API fails or quota is reached
+    } catch {
       res.json({ source: 'heuristic-fallback', evaluation: heuristic });
     }
   });
 
-  // 2. Dynamically Generate Unlimited New BPO Scenarios via Gemini
+  // 2. Dynamically Generate Unlimited New BPO Scenarios via Gemini + TP Portugal Fallback
   app.post('/api/ai/generate-scenario', async (req, res) => {
-    const { type = 'written', sector = 'E-Commerce & Logistique VIP' } = req.body || {};
-    const ai = getGenAIClient();
+    const {
+      type = 'written',
+      sector = 'Fintech & Néo-Banque',
+      excludeIds = [],
+    } = req.body || {};
 
+    const safeType: 'written' | 'spoken' = type === 'spoken' ? 'spoken' : 'written';
+    const matchingPool = TP_PORTUGAL_SCENARIO_POOL.filter(
+      (s) => s.type === safeType && !excludeIds.includes(s.id)
+    );
+    const fallbackCandidate =
+      matchingPool.length > 0
+        ? matchingPool[Math.floor(Math.random() * matchingPool.length)]
+        : TP_PORTUGAL_SCENARIO_POOL.find((s) => s.type === safeType) || TP_PORTUGAL_SCENARIO_POOL[0];
+
+    const ai = getGenAIClient();
     if (!ai) {
       res.json({
-        source: 'builtin-generator',
+        source: 'tp-portugal-pool',
         scenario: {
-          id: `gen-${Date.now()}`,
-          type,
-          title: `Scénario Généré : Litige ${sector} (Lisbonne / Paris)`,
-          companyContext: `Centre d'Excellence Francophone Portugal — Pôle ${sector}`,
-          cefrTarget: 'C1',
-          customerVoiceScript:
-            "Bonjour, je vous contacte car ma commande professionnelle #PR-5582 livrée ce matin à Lyon est incomplète : il manque deux écrans sur les cinq facturés, alors que nos nouveaux collaborateurs prennent leur poste demain matin !",
-          promptTask:
-            "Répondez au client pour : 1) Présenter vos excuses professionnelles au nom de l'entreprise, 2) Confirmer l'expédition express par transporteur dédié avant demain 10h00, 3) Accorder un avoir commercial de 15% sur la facture.",
-          prepSeconds: type === 'spoken' ? 30 : 0,
-          responseSeconds: type === 'spoken' ? 90 : 300,
-          keyPointsToCover: [
-            'Salutation corporate + reconnaissance de l’urgence opérationnelle',
-            'Expédition express garantie avant demain 10h00',
-            'Avoir commercial de 15% + excuses soutenues',
-          ],
-          idealB2:
-            "Bonjour Madame, Monsieur, nous vous prions de bien vouloir nous excuser pour la livraison incomplète de votre commande #PR-5582. Conscients de l'urgence pour l'arrivée de vos collaborateurs demain, nous venons d'expédier les deux écrans manquants par coursier express pour une livraison demain avant 10h00. De plus, nous appliquons une remise de 15 % sur votre facture.",
-          idealC1:
-            "Bonjour Madame, Monsieur, nous accusons réception de votre signalement relatif à la commande #PR-5582 et mesurons pleinement l'impact de cet oubli à la veille de l'intégration de vos collaborateurs. Soyez assuré(e) que j'ai immédiatement déclenché un affrètement prioritaire afin que les deux moniteurs manquants vous soient livrés demain matin avant 10h00. En guise de dédommagement, un avoir de 15 % a été crédité sur votre compte client.",
-          darijaTip:
-            'فهاد السيناريو الجديد، ركز على السرعة ("affrètement prioritaire avant 10h00") والتعويض التجاري ("en guise de dédommagement, un avoir de 15%").',
+          ...fallbackCandidate,
+          id: `tp-local-${Date.now()}`,
         },
       });
       return;
@@ -169,8 +195,8 @@ Analyse cette réponse et retourne un objet JSON contenant :
 
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: `Génère un nouveau scénario d'examen Pipplet (${type === 'spoken' ? 'Oral' : 'Écrit E-mail'}) pour le recrutement dans un centre d'appels / BPO francophone au Portugal dans le secteur "${sector}". Retourne un JSON complet avec une explication en Darija marocaine (alphabet arabe).`,
+        model: 'gemini-3-flash-preview',
+        contents: `Génère un nouveau scénario d'examen Pipplet (${safeType === 'spoken' ? 'Oral' : 'Écrit E-mail'}) pour le recrutement chez Teleperformance Portugal (Lisbonne - Atlantic Experience) dans le secteur "${sector}". Retourne un JSON complet avec une explication en Darija marocaine (alphabet arabe) mettant les termes français entre guillemets.`,
         config: {
           responseMimeType: 'application/json',
           responseSchema: {
@@ -178,6 +204,7 @@ Analyse cette réponse et retourne un objet JSON contenant :
             properties: {
               title: { type: Type.STRING },
               companyContext: { type: Type.STRING },
+              projectTag: { type: Type.STRING },
               customerVoiceScript: { type: Type.STRING },
               promptTask: { type: Type.STRING },
               keyPointsToCover: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -193,22 +220,32 @@ Analyse cette réponse et retourne un objet JSON contenant :
         source: 'gemini-ai',
         scenario: {
           id: `ai-${Date.now()}`,
-          type,
-          title: data.title || `Scénario IA : ${sector}`,
-          companyContext: data.companyContext || `BPO Portugal — ${sector}`,
+          type: safeType,
+          projectTag: data.projectTag || sector,
+          title: data.title || fallbackCandidate.title,
+          companyContext: data.companyContext || fallbackCandidate.companyContext,
           cefrTarget: 'C1',
-          customerVoiceScript: data.customerVoiceScript,
-          promptTask: data.promptTask,
-          prepSeconds: type === 'spoken' ? 30 : 0,
-          responseSeconds: type === 'spoken' ? 90 : 300,
-          keyPointsToCover: data.keyPointsToCover || ['Accueil empathique', 'Solution concrète', 'Politesse C1'],
-          idealB2: data.idealB2,
-          idealC1: data.idealC1,
-          darijaTip: data.darijaTip,
+          customerVoiceScript: data.customerVoiceScript || fallbackCandidate.customerVoiceScript,
+          promptTask: data.promptTask || fallbackCandidate.promptTask,
+          prepSeconds: safeType === 'spoken' ? 30 : 0,
+          responseSeconds: safeType === 'spoken' ? 90 : 300,
+          keyPointsToCover:
+            Array.isArray(data.keyPointsToCover) && data.keyPointsToCover.length > 0
+              ? data.keyPointsToCover
+              : fallbackCandidate.keyPointsToCover,
+          idealB2: data.idealB2 || fallbackCandidate.idealB2,
+          idealC1: data.idealC1 || fallbackCandidate.idealC1,
+          darijaTip: data.darijaTip || fallbackCandidate.darijaTip,
         },
       });
-    } catch (err) {
-      res.status(500).json({ error: 'Erreur lors de la génération IA' });
+    } catch {
+      res.json({
+        source: 'tp-portugal-fallback',
+        scenario: {
+          ...fallbackCandidate,
+          id: `tp-fallback-${Date.now()}`,
+        },
+      });
     }
   });
 
