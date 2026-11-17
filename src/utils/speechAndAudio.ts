@@ -1,13 +1,14 @@
 /**
  * Browser Web Speech API (TTS & SpeechRecognition) + Web Audio API microphone waveform visualizer.
- * Designed with safe fallbacks so audio playback, mic recording, and live waveform visualization
- * work seamlessly across desktop browsers, mobile devices, and headless test environments.
+ * Includes mobile Safari (iOS) and Chrome (Android) auto-restart logic so continuous recording
+ * never drops prematurely during 90-second Pipplet or TP Portugal interview simulations.
  */
 
 export function speakFrenchText(
   text: string,
   options?: {
     rate?: number;
+    lang?: 'fr-FR' | 'en-US';
     onStart?: () => void;
     onEnd?: () => void;
   }
@@ -20,18 +21,25 @@ export function speakFrenchText(
 
   try {
     window.speechSynthesis.cancel();
+    const targetLang = options?.lang ?? 'fr-FR';
+    const langPrefix = targetLang.slice(0, 2).toLowerCase();
+
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'fr-FR';
+    utterance.lang = targetLang;
     utterance.rate = options?.rate ?? 1.0;
 
     const voices = window.speechSynthesis.getVoices();
-    const frenchVoice =
-      voices.find((v) => v.lang.toLowerCase().startsWith('fr') && v.name.toLowerCase().includes('natural')) ||
-      voices.find((v) => v.lang.toLowerCase() === 'fr-fr') ||
-      voices.find((v) => v.lang.toLowerCase().startsWith('fr'));
+    const matchedVoice =
+      voices.find(
+        (v) =>
+          v.lang.toLowerCase().startsWith(langPrefix) &&
+          v.name.toLowerCase().includes('natural')
+      ) ||
+      voices.find((v) => v.lang.toLowerCase() === targetLang.toLowerCase()) ||
+      voices.find((v) => v.lang.toLowerCase().startsWith(langPrefix));
 
-    if (frenchVoice) {
-      utterance.voice = frenchVoice;
+    if (matchedVoice) {
+      utterance.voice = matchedVoice;
     }
 
     utterance.onstart = () => options?.onStart?.();
@@ -60,6 +68,8 @@ export interface LiveSpeechController {
 }
 
 export function startFrenchSpeechRecognition(callbacks: {
+  lang?: 'fr-FR' | 'en-US';
+  initialText?: string;
   onTranscript: (finalAndInterimText: string) => void;
   onWaveformUpdate?: (bars: number[]) => void;
   onError?: (message: string) => void;
@@ -69,8 +79,8 @@ export function startFrenchSpeechRecognition(callbacks: {
   let audioContext: AudioContext | null = null;
   let mediaStream: MediaStream | null = null;
   let animTimer: ReturnType<typeof setInterval> | null = null;
+  let accumulatedFinal = callbacks.initialText ? callbacks.initialText.trim() + ' ' : '';
 
-  // 1. Start Web Speech Recognition if supported
   const SpeechRecognitionCtor =
     typeof window !== 'undefined'
       ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -79,11 +89,9 @@ export function startFrenchSpeechRecognition(callbacks: {
   if (SpeechRecognitionCtor) {
     try {
       recognitionInstance = new SpeechRecognitionCtor();
-      recognitionInstance.lang = 'fr-FR';
+      recognitionInstance.lang = callbacks.lang ?? 'fr-FR';
       recognitionInstance.continuous = true;
       recognitionInstance.interimResults = true;
-
-      let accumulatedFinal = '';
 
       recognitionInstance.onresult = (event: any) => {
         if (!active) return;
@@ -91,7 +99,7 @@ export function startFrenchSpeechRecognition(callbacks: {
         for (let i = event.resultIndex; i < event.results.length; ++i) {
           const transcriptPiece = event.results[i][0].transcript;
           if (event.results[i].isFinal) {
-            accumulatedFinal += transcriptPiece + ' ';
+            accumulatedFinal += transcriptPiece.trim() + ' ';
           } else {
             interim += transcriptPiece;
           }
@@ -99,9 +107,29 @@ export function startFrenchSpeechRecognition(callbacks: {
         callbacks.onTranscript((accumulatedFinal + interim).trim());
       };
 
+      // Mobile iOS Safari & Android Chrome auto-restart when speech recognition pauses
+      recognitionInstance.onend = () => {
+        if (active) {
+          setTimeout(() => {
+            if (!active) return;
+            try {
+              recognitionInstance.start();
+            } catch {
+              // ignore if already started
+            }
+          }, 180);
+        }
+      };
+
       recognitionInstance.onerror = (event: any) => {
-        if (event?.error && event.error !== 'no-speech' && event.error !== 'aborted') {
-          callbacks.onError?.(`Reconnaissance vocale (${event.error}) — vous pouvez aussi saisir ou éditer la transcription.`);
+        if (
+          event?.error &&
+          event.error !== 'no-speech' &&
+          event.error !== 'aborted'
+        ) {
+          callbacks.onError?.(
+            `Reconnaissance vocale (${event.error}) — vous pouvez aussi saisir ou éditer la transcription.`
+          );
         }
       };
 
@@ -111,7 +139,7 @@ export function startFrenchSpeechRecognition(callbacks: {
     }
   }
 
-  // 2. Start Microphone AudioContext Analyzer for live waveform bars
+  // Start Microphone AudioContext Analyzer for live waveform bars
   if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
     navigator.mediaDevices
       .getUserMedia({ audio: true })
@@ -142,7 +170,6 @@ export function startFrenchSpeechRecognition(callbacks: {
         }
       })
       .catch(() => {
-        // Fallback dynamic waveform if microphone is unavailable in sandbox
         animTimer = setInterval(() => {
           if (!active) return;
           const bars = Array.from({ length: 24 }, (_, i) =>
