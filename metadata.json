@@ -1,0 +1,6 @@
+{
+  "name": "FR-PRO PORTUGAL — Corporate French Assessment & AI Coach Suite",
+  "description": "Production-grade corporate French assessment simulator and AI coach for Portuguese multinational & BPO recruitment (Pipplet, Versant, TestGorilla, Harver Multi-Chat/SJT, EF SET CAT) with Moroccan Darija explanations.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
